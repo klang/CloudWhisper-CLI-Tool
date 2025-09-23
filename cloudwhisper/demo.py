@@ -19,16 +19,16 @@ def run_command(command, description):
     console.print(f"\n[bold blue]Demo: {description}[/bold blue]")
     console.print(f"[dim]Command: {command}[/dim]")
     console.print("─" * 60)
-    
+
     try:
         # Use bash explicitly to handle source command
         result = subprocess.run(
-            ["bash", "-c", command], 
-            capture_output=True, 
-            text=True, 
+            ["bash", "-c", command],
+            capture_output=True,
+            text=True,
             cwd="/mnt/c/Users/sidda/OneDrive/Desktop/Q-Developer-Challenge/cloudwhisper"
         )
-        
+
         if result.returncode == 0:
             if result.stdout:
                 console.print(result.stdout)
@@ -45,18 +45,18 @@ def run_command(command, description):
 
 def main():
     """Run the CloudWhisper demonstration."""
-    
+
     console.print(Panel.fit(
         Text("CloudWhisper CLI Tool Demonstration", style="bold white"),
         style="bold blue",
         padding=(1, 2)
     ))
-    
+
     console.print("""
 [bold yellow]CloudWhisper[/bold yellow] is an AI-powered CLI tool that helps you:
 
 1. 🤖 Generate Terraform code from natural language
-2. 💰 Analyze AWS costs and usage patterns  
+2. 💰 Analyze AWS costs and usage patterns
 3. 🔧 Get optimization recommendations to reduce spending
 4. 🔍 Find idle resources that can be terminated
 5. 💡 Get Savings Plans recommendations
@@ -65,36 +65,36 @@ def main():
 - AWS credentials configured
 - OpenAI API key for Terraform generation
 """)
-    
+
     # Activate virtual environment prefix
     venv_prefix = "source venv/bin/activate && "
-    
+
     # Demo 1: Show help
     run_command(f"{venv_prefix}cloudwhisper --help", "Main help menu")
-    
+
     # Demo 2: Show generate help
     run_command(f"{venv_prefix}cloudwhisper generate --help", "Terraform generation help")
-    
+
     # Demo 3: Show analyze-costs help
     run_command(f"{venv_prefix}cloudwhisper analyze-costs --help", "Cost analysis help")
-    
+
     # Demo 4: Show optimize help
     run_command(f"{venv_prefix}cloudwhisper optimize --help", "Optimization help")
-    
+
     # Demo 5: Show find-idle help
     run_command(f"{venv_prefix}cloudwhisper find-idle --help", "Find idle resources help")
-    
+
     # Demo 6: Show savings-plans help
     run_command(f"{venv_prefix}cloudwhisper savings-plans --help", "Savings Plans help")
-    
+
     console.print(f"\n[bold green]✓ CloudWhisper CLI tool is successfully installed and working![/bold green]")
-    
+
     console.print(Panel("""
 [bold yellow]Next Steps:[/bold yellow]
 
 1. Set up your environment variables:
    [dim]export AWS_ACCESS_KEY_ID=your_access_key
-   export AWS_SECRET_ACCESS_KEY=your_secret_key  
+   export AWS_SECRET_ACCESS_KEY=your_secret_key
    export AWS_DEFAULT_REGION=us-east-1
    export OPENAI_API_KEY=your_openai_key[/dim]
 

@@ -3,8 +3,12 @@
 
 # AWS Configuration
 aws:
-  default_region: us-east-1
-  profile: default  # AWS profile to use
+  default_region: eu-west-1
+  profile: default  # AWS profile to use (from ~/.aws/credentials)
+  # Alternative profiles for different environments:
+  # profile: sandbox
+  # profile: production
+  # profile: development
 
 # OpenAI Configuration (for Terraform generation)
 openai:
@@ -12,6 +16,23 @@ openai:
   model: gpt-4
   temperature: 0.1
   max_tokens: 2000
+
+# AWS Bedrock Configuration (alternative to OpenAI)
+bedrock:
+  region: us-east-1  # Bedrock region (may differ from default AWS region)
+  model_id: "eu.anthropic.claude-3-7-sonnet-20250219-v1:0"  # Default model
+  max_tokens: 2000
+  temperature: 0.1
+  # Alternative models available:
+  # - anthropic.claude-3-haiku-20240307-v1:0 (faster, cheaper)
+  # - anthropic.claude-3-opus-20240229-v1:0 (most capable)
+  # - amazon.titan-text-express-v1 (Amazon's model)
+  # - ai21.j2-ultra-v1 (AI21 Labs)
+  # - cohere.command-text-v14 (Cohere)
+
+# LLM Provider Selection (openai or bedrock)
+llm:
+  provider: openai  # Change to 'bedrock' to use AWS Bedrock instead of OpenAI
 
 # Cost Analysis Settings
 cost_analysis:

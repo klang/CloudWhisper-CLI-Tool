@@ -25,18 +25,18 @@ red = '#F44336'
 aws_orange = '#FF9900'
 
 # Title
-ax.text(8, 11.5, 'CloudWhisper', 
+ax.text(8, 11.5, 'CloudWhisper',
         fontsize=28, fontweight='bold', ha='center', color=primary_blue)
-ax.text(8, 11, 'Feature Overview & Benefits', 
+ax.text(8, 11, 'Feature Overview & Benefits',
         fontsize=16, ha='center', color=secondary_blue, style='italic')
 
 # Central CloudWhisper logo/circle
-center_circle = Circle((8, 7), 1.5, facecolor=primary_blue, edgecolor=dark_gray, 
+center_circle = Circle((8, 7), 1.5, facecolor=primary_blue, edgecolor=dark_gray,
                       linewidth=3, alpha=0.9)
 ax.add_patch(center_circle)
-ax.text(8, 7.2, 'CloudWhisper', fontsize=14, fontweight='bold', 
+ax.text(8, 7.2, 'CloudWhisper', fontsize=14, fontweight='bold',
         ha='center', va='center', color='white')
-ax.text(8, 6.8, 'CLI Tool', fontsize=12, 
+ax.text(8, 6.8, 'CLI Tool', fontsize=12,
         ha='center', va='center', color='white')
 
 # Feature boxes around the center
@@ -52,35 +52,35 @@ features = [
 
 for x, y, w, h, title, desc, color in features:
     # Feature box
-    feature_box = FancyBboxPatch((x, y), w, h, 
-                                 boxstyle="round,pad=0.1", 
-                                 facecolor=color, 
-                                 edgecolor=dark_gray, 
+    feature_box = FancyBboxPatch((x, y), w, h,
+                                 boxstyle="round,pad=0.1",
+                                 facecolor=color,
+                                 edgecolor=dark_gray,
                                  linewidth=2,
                                  alpha=0.9)
     ax.add_patch(feature_box)
-    
+
     # Feature title
-    ax.text(x + w/2, y + h - 0.3, title, fontsize=12, fontweight='bold', 
+    ax.text(x + w/2, y + h - 0.3, title, fontsize=12, fontweight='bold',
             ha='center', va='center', color='white')
-    
+
     # Feature description
-    ax.text(x + w/2, y + 0.3, desc, fontsize=10, 
+    ax.text(x + w/2, y + 0.3, desc, fontsize=10,
             ha='center', va='center', color='white')
-    
+
     # Connection line to center
     center_x, center_y = 8, 7
     feature_center_x, feature_center_y = x + w/2, y + h/2
-    
+
     # Calculate connection points
     dx = feature_center_x - center_x
     dy = feature_center_y - center_y
     distance = np.sqrt(dx**2 + dy**2)
-    
+
     # Start point (edge of center circle)
     start_x = center_x + (dx / distance) * 1.5
     start_y = center_y + (dy / distance) * 1.5
-    
+
     # End point (edge of feature box)
     if abs(dx) > abs(dy):  # Horizontal connection
         end_x = x if dx < 0 else x + w
@@ -88,10 +88,10 @@ for x, y, w, h, title, desc, color in features:
     else:  # Vertical connection
         end_x = feature_center_x
         end_y = y if dy < 0 else y + h
-    
+
     # Draw connection line
-    line = patches.ConnectionPatch((start_x, start_y), (end_x, end_y), 
-                                  "data", "data", arrowstyle='-', 
+    line = patches.ConnectionPatch((start_x, start_y), (end_x, end_y),
+                                  "data", "data", arrowstyle='-',
                                   color=color, alpha=0.6, linewidth=3)
     ax.add_artist(line)
 
@@ -110,22 +110,22 @@ benefit_colors = [primary_blue, accent_orange, green, secondary_blue]
 
 x_positions = [1, 5, 9, 13]
 for i, (benefit, desc) in enumerate(benefits):
-    benefit_box = FancyBboxPatch((x_positions[i] - 1.5, benefits_y - 0.8), 3, 1.2, 
-                                 boxstyle="round,pad=0.05", 
-                                 facecolor=light_gray, 
-                                 edgecolor=benefit_colors[i], 
+    benefit_box = FancyBboxPatch((x_positions[i] - 1.5, benefits_y - 0.8), 3, 1.2,
+                                 boxstyle="round,pad=0.05",
+                                 facecolor=light_gray,
+                                 edgecolor=benefit_colors[i],
                                  linewidth=2,
                                  alpha=0.9)
     ax.add_patch(benefit_box)
-    
-    ax.text(x_positions[i], benefits_y - 0.1, benefit, fontsize=10, fontweight='bold', 
+
+    ax.text(x_positions[i], benefits_y - 0.1, benefit, fontsize=10, fontweight='bold',
             ha='center', va='center', color=benefit_colors[i])
-    ax.text(x_positions[i], benefits_y - 0.5, desc, fontsize=8, 
+    ax.text(x_positions[i], benefits_y - 0.5, desc, fontsize=8,
             ha='center', va='center', color=dark_gray)
 
 # Use cases at the bottom
 use_cases_y = 0.8
-ax.text(8, use_cases_y + 0.3, 'Perfect for DevOps Teams, Cloud Engineers, and Cost Optimization Specialists', 
+ax.text(8, use_cases_y + 0.3, 'Perfect for DevOps Teams, Cloud Engineers, and Cost Optimization Specialists',
         fontsize=12, ha='center', color=dark_gray, style='italic')
 
 # Add some decorative elements
@@ -137,15 +137,15 @@ for i, (service, color) in enumerate(zip(aws_services, service_colors)):
     angle = i * (2 * np.pi / len(aws_services))
     x = 8 + 3.5 * np.cos(angle)
     y = 7 + 3.5 * np.sin(angle)
-    
-    service_circle = Circle((x, y), 0.3, facecolor=color, edgecolor=dark_gray, 
+
+    service_circle = Circle((x, y), 0.3, facecolor=color, edgecolor=dark_gray,
                            alpha=0.7)
     ax.add_patch(service_circle)
-    ax.text(x, y, service, fontsize=8, fontweight='bold', 
+    ax.text(x, y, service, fontsize=8, fontweight='bold',
             ha='center', va='center', color='white')
 
 plt.tight_layout()
-plt.savefig('/mnt/c/Users/sidda/OneDrive/Desktop/Q-Developer-Challenge/cloudwhisper/cloudwhisper_features.png', 
+plt.savefig('/mnt/c/Users/sidda/OneDrive/Desktop/Q-Developer-Challenge/cloudwhisper/cloudwhisper_features.png',
             dpi=300, bbox_inches='tight', facecolor='white', edgecolor='none')
 plt.close()
 

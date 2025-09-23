@@ -29,6 +29,12 @@ export AWS_DEFAULT_REGION=us-east-1
 export OPENAI_API_KEY=your_openai_key
 ```
 
+or create a `config.yaml` file based on `config.example.yaml` and fill in your details,followed by 
+
+```bash
+cloudwisper setup
+```
+
 ## Usage
 
 ### Generate Terraform Code
