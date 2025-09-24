@@ -2,21 +2,53 @@
 
 import os
 import json
-from typing import Dict, Any, Optional
+import yaml
+import requests
+from typing import Dict, Any, Optional, List
 from openai import OpenAI
+import boto3
 from jinja2 import Template
+from botocore.exceptions import ClientError
+from .aws_session import AWSSessionManager
 
 class TerraformGenerator:
     """Generate Terraform code from natural language descriptions using LLM."""
-    
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize the Terraform generator with OpenAI client."""
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
-        if not self.api_key:
-            raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable.")
-        
-        self.client = OpenAI(api_key=self.api_key)
-        
+
+    def __init__(self,
+                 provider: str = "openai",
+                 api_key: Optional[str] = None,
+                 region: Optional[str] = None,
+                 model_id: Optional[str] = None,
+                 openai_model: str = "gpt-3.5-turbo",
+                 max_tokens: int = 2000,
+                 temperature: float = 0.1,
+                 aws_profile: Optional[str] = None,
+                 # Local LLM parameters
+                 base_url: Optional[str] = None,
+                 local_model: Optional[str] = None,
+                 timeout: int = 30,
+                 verify_ssl: bool = True):
+        """Initialize the Terraform generator with specified LLM provider."""
+
+        self.provider = provider.lower()
+        self.max_tokens = max_tokens
+        self.temperature = temperature
+        self.aws_profile = aws_profile
+        self.timeout = timeout
+        self.verify_ssl = verify_ssl
+
+        # Initialize based on provider
+        if self.provider == "openai":
+            self._init_openai(api_key, openai_model)
+        elif self.provider == "bedrock":
+            self._init_bedrock(region, model_id, aws_profile)
+        elif self.provider == "lmstudio":
+            self._init_lmstudio(base_url, local_model)
+        elif self.provider == "ollama":
+            self._init_ollama(base_url, local_model)
+        else:
+            raise ValueError(f"Unsupported provider: {provider}. Use 'openai', 'bedrock', 'lmstudio', or 'ollama'")
+
         # Terraform templates for common AWS resources
         self.templates = {
             'provider': '''
@@ -53,16 +85,440 @@ output "{{ name }}" {
 }
 '''
         }
-    
+
+        # Model-specific configurations for Bedrock
+        self.bedrock_model_configs = {
+            'anthropic.claude-3-sonnet-20240229-v1:0': {
+                'input_format': 'anthropic',
+                'supports_system_prompt': True
+            },
+            'anthropic.claude-3-haiku-20240307-v1:0': {
+                'input_format': 'anthropic',
+                'supports_system_prompt': True
+            },
+            'anthropic.claude-3-opus-20240229-v1:0': {
+                'input_format': 'anthropic',
+                'supports_system_prompt': True
+            },
+            'amazon.titan-text-express-v1': {
+                'input_format': 'titan',
+                'supports_system_prompt': False
+            },
+            'ai21.j2-ultra-v1': {
+                'input_format': 'ai21',
+                'supports_system_prompt': False
+            },
+            'cohere.command-text-v14': {
+                'input_format': 'cohere',
+                'supports_system_prompt': False
+            }
+        }
+
+    def _init_openai(self, api_key: Optional[str], model: str):
+        """Initialize OpenAI client."""
+        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+        if not self.api_key:
+            raise ValueError("OpenAI API key is required. Set OPENAI_API_KEY environment variable.")
+
+        self.openai_client = OpenAI(api_key=self.api_key)
+        self.openai_model = model
+
+    def _init_bedrock(self, region: Optional[str], model_id: Optional[str], aws_profile: Optional[str]):
+        """Initialize AWS Bedrock client with profile support."""
+        self.bedrock_region = region or os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+        self.bedrock_model_id = model_id or os.getenv('BEDROCK_MODEL_ID', 'anthropic.claude-3-sonnet-20240229-v1:0')
+
+        try:
+            # Use session manager for profile support
+            self.aws_session_manager = AWSSessionManager(
+                profile_name=aws_profile,
+                region_name=self.bedrock_region
+            )
+            self.bedrock_client = self.aws_session_manager.get_client('bedrock-runtime')
+        except Exception as e:
+            raise ValueError(f"Failed to initialize Bedrock client: {str(e)}")
+
+    def _init_lmstudio(self, base_url: Optional[str], model: Optional[str]):
+        """Initialize LM Studio client (OpenAI-compatible API)."""
+        self.lmstudio_base_url = base_url or "http://127.0.0.1:1234"
+        self.lmstudio_model = model or "auto"  # LM Studio uses "auto" for currently loaded model
+
+        # Test connectivity
+        try:
+            response = requests.get(f"{self.lmstudio_base_url}/v1/models", timeout=5, verify=self.verify_ssl)
+            response.raise_for_status()
+        except requests.exceptions.RequestException as e:
+            raise ValueError(f"Failed to connect to LM Studio at {self.lmstudio_base_url}: {str(e)}")
+
+        # Initialize OpenAI client with custom base URL
+        self.lmstudio_client = OpenAI(
+            api_key="lm-studio",  # LM Studio doesn't require a real API key
+            base_url=f"{self.lmstudio_base_url}/v1"
+        )
+
+    def _init_ollama(self, base_url: Optional[str], model: Optional[str]):
+        """Initialize Ollama client."""
+        self.ollama_base_url = base_url or "http://localhost:11434"
+        self.ollama_model = model or "llama3.2"  # Default model
+
+        # Test connectivity
+        try:
+            response = requests.get(f"{self.ollama_base_url}/api/tags", timeout=5, verify=self.verify_ssl)
+            response.raise_for_status()
+
+            # Check if the specified model exists
+            models_data = response.json()
+            available_models = [model['name'].split(':')[0] for model in models_data.get('models', [])]
+
+            if self.ollama_model not in available_models and available_models:
+                # Use the first available model if specified model doesn't exist
+                self.ollama_model = available_models[0]
+                print(f"Warning: Specified model not found. Using {self.ollama_model}")
+
+        except requests.exceptions.RequestException as e:
+            raise ValueError(f"Failed to connect to Ollama at {self.ollama_base_url}: {str(e)}")
+
+    @classmethod
+    def from_config(cls, config_path: Optional[str] = None, aws_profile: Optional[str] = None, auto_detect_provider: bool = True):
+        """Create TerraformGenerator from configuration file with smart provider detection."""
+        if config_path is None:
+            # Try common config locations
+            config_locations = [
+                os.path.expanduser("~/.cloudwhisper/config.yaml"),
+                os.path.join(os.getcwd(), "config.yaml"),
+                os.path.join(os.getcwd(), "config.example.yaml")
+            ]
+
+            for location in config_locations:
+                if os.path.exists(location):
+                    config_path = location
+                    break
+
+        if config_path and os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                config = yaml.safe_load(f)
+
+            # Extract AWS profile from config or parameter
+            aws_config = config.get('aws', {})
+            profile = aws_profile or aws_config.get('profile')
+
+            # Extract configuration
+            llm_config = config.get('llm', {})
+            provider = llm_config.get('provider', 'openai')
+
+            if provider == 'openai':
+                openai_config = config.get('openai', {})
+                return cls(
+                    provider='openai',
+                    api_key=openai_config.get('api_key'),
+                    openai_model=openai_config.get('model', 'gpt-3.5-turbo'),
+                    max_tokens=openai_config.get('max_tokens', 2000),
+                    temperature=openai_config.get('temperature', 0.1),
+                    aws_profile=profile
+                )
+            elif provider == 'bedrock':
+                bedrock_config = config.get('bedrock', {})
+                return cls(
+                    provider='bedrock',
+                    region=bedrock_config.get('region'),
+                    model_id=bedrock_config.get('model_id'),
+                    max_tokens=bedrock_config.get('max_tokens', 2000),
+                    temperature=bedrock_config.get('temperature', 0.1),
+                    aws_profile=profile
+                )
+            elif provider == 'lmstudio':
+                lmstudio_config = config.get('lmstudio', {})
+                return cls(
+                    provider='lmstudio',
+                    base_url=lmstudio_config.get('base_url'),
+                    local_model=lmstudio_config.get('model'),
+                    max_tokens=lmstudio_config.get('max_tokens', 2000),
+                    temperature=lmstudio_config.get('temperature', 0.1),
+                    timeout=lmstudio_config.get('timeout', 30),
+                    aws_profile=profile
+                )
+            elif provider == 'ollama':
+                ollama_config = config.get('ollama', {})
+                return cls(
+                    provider='ollama',
+                    base_url=ollama_config.get('base_url'),
+                    local_model=ollama_config.get('model'),
+                    max_tokens=ollama_config.get('max_tokens', 2000),
+                    temperature=ollama_config.get('temperature', 0.1),
+                    timeout=ollama_config.get('timeout', 60),
+                    aws_profile=profile
+                )
+
+        # No config file found - use smart detection if enabled
+        if auto_detect_provider:
+            provider = cls._detect_best_provider(aws_profile)
+
+            if provider == 'bedrock':
+                return cls(
+                    provider='bedrock',
+                    aws_profile=aws_profile,
+                    region=os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+                )
+            elif provider == 'openai':
+                return cls(provider='openai', aws_profile=aws_profile)
+
+        # Fallback to original behavior with better error handling
+        return cls._create_with_fallback(aws_profile)
+
+    @classmethod
+    def _detect_best_provider(cls, aws_profile: Optional[str] = None) -> str:
+        """Detect the best available provider based on available credentials."""
+
+        # Check local LLM availability first (no API keys needed)
+        lmstudio_available = cls._check_lmstudio_availability()
+        ollama_available = cls._check_ollama_availability()
+
+        # Check cloud providers
+        openai_available = bool(os.getenv('OPENAI_API_KEY'))
+
+        # Check AWS/Bedrock availability
+        bedrock_available = False
+        try:
+            session_manager = AWSSessionManager(profile_name=aws_profile)
+            # Try to create a bedrock client to test access
+            bedrock_client = session_manager.get_client('bedrock-runtime')
+            bedrock_available = True
+        except Exception:
+            bedrock_available = False
+
+        # Priority logic:
+        # 1. Local LLMs first (no API keys needed, fully local)
+        # 2. AWS Bedrock if profile specified (no API keys, but cloud)
+        # 3. OpenAI if API key available
+        # 4. Any available provider as fallback
+
+        if lmstudio_available:
+            return 'lmstudio'
+        elif ollama_available:
+            return 'ollama'
+        elif aws_profile and bedrock_available:
+            return 'bedrock'
+        elif openai_available and not aws_profile:
+            return 'openai'
+        elif bedrock_available:
+            return 'bedrock'
+        elif openai_available:
+            return 'openai'
+        else:
+            raise ValueError(
+                "No LLM provider available. Please either:\n"
+                "1. Start LM Studio (http://127.0.0.1:1234) or Ollama (http://localhost:11434), or\n"
+                "2. Set OPENAI_API_KEY environment variable for OpenAI, or\n"
+                "3. Configure AWS credentials/profile for Bedrock access, or\n"
+                "4. Create a config file with provider settings"
+            )
+
+    @classmethod
+    def _check_lmstudio_availability(cls) -> bool:
+        """Check if LM Studio is running and accessible."""
+        try:
+            response = requests.get("http://127.0.0.1:1234/v1/models", timeout=2)
+            return response.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
+
+    @classmethod
+    def _check_ollama_availability(cls) -> bool:
+        """Check if Ollama is running and accessible."""
+        try:
+            response = requests.get("http://localhost:11434/api/tags", timeout=2)
+            return response.status_code == 200
+        except requests.exceptions.RequestException:
+            return False
+
+    @classmethod
+    def _create_with_fallback(cls, aws_profile: Optional[str] = None):
+        """Create TerraformGenerator with fallback logic when no config is found."""
+        try:
+            # Try to detect the best provider
+            provider = cls._detect_best_provider(aws_profile)
+
+            if provider == 'lmstudio':
+                return cls(provider='lmstudio')
+            elif provider == 'ollama':
+                return cls(provider='ollama')
+            elif provider == 'bedrock':
+                return cls(
+                    provider='bedrock',
+                    aws_profile=aws_profile,
+                    region=os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
+                )
+            else:  # OpenAI
+                return cls(provider='openai', aws_profile=aws_profile)
+
+        except ValueError as e:
+            # If detection fails, provide helpful error message
+            raise ValueError(f"No LLM provider configured: {str(e)}")
+
     def generate_terraform(self, description: str, provider_version: str = "~> 5.0") -> str:
         """Generate Terraform code from natural language description."""
-        
+
         # Create a comprehensive prompt for the LLM
         prompt = self._create_terraform_prompt(description)
-        
+
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
+            if self.provider == "openai":
+                terraform_code = self._generate_with_openai(prompt)
+            elif self.provider == "bedrock":
+                terraform_code = self._generate_with_bedrock(prompt)
+            elif self.provider == "lmstudio":
+                terraform_code = self._generate_with_lmstudio(prompt)
+            elif self.provider == "ollama":
+                terraform_code = self._generate_with_ollama(prompt)
+            else:
+                raise ValueError(f"Unsupported provider: {self.provider}")
+
+            # Add provider configuration
+            provider_template = Template(self.templates['provider'])
+            provider_config = provider_template.render(provider_version=provider_version)
+
+            # Combine provider config with generated code
+            full_terraform_code = f"{provider_config}\n{terraform_code}"
+
+            return self._clean_terraform_code(full_terraform_code)
+
+        except Exception as e:
+            raise Exception(f"Failed to generate Terraform code: {str(e)}")
+
+    def _generate_with_openai(self, prompt: str) -> str:
+        """Generate Terraform code using OpenAI."""
+        response = self.openai_client.chat.completions.create(
+            model=self.openai_model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert Terraform developer specializing in AWS infrastructure. Generate clean, production-ready Terraform code with proper resource naming, tags, and best practices."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=self.temperature,
+            max_tokens=self.max_tokens
+        )
+
+        return response.choices[0].message.content.strip()
+
+    def _generate_with_bedrock(self, prompt: str) -> str:
+        """Generate Terraform code using AWS Bedrock."""
+        model_config = self.bedrock_model_configs.get(
+            self.bedrock_model_id,
+            {'input_format': 'anthropic', 'supports_system_prompt': True}
+        )
+
+        if model_config['input_format'] == 'anthropic':
+            return self._call_anthropic_model(prompt)
+        elif model_config['input_format'] == 'titan':
+            return self._call_titan_model(prompt)
+        elif model_config['input_format'] == 'ai21':
+            return self._call_ai21_model(prompt)
+        elif model_config['input_format'] == 'cohere':
+            return self._call_cohere_model(prompt)
+        else:
+            raise ValueError(f"Unsupported model format: {model_config['input_format']}")
+
+    def _call_anthropic_model(self, prompt: str) -> str:
+        """Call Anthropic Claude models via Bedrock."""
+        system_prompt = "You are an expert Terraform developer specializing in AWS infrastructure. Generate clean, production-ready Terraform code with proper resource naming, tags, and best practices."
+
+        body = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "system": system_prompt,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        }
+
+        response = self.bedrock_client.invoke_model(
+            modelId=self.bedrock_model_id,
+            body=json.dumps(body),
+            contentType='application/json'
+        )
+
+        response_body = json.loads(response['body'].read())
+        return response_body['content'][0]['text']
+
+    def _call_titan_model(self, prompt: str) -> str:
+        """Call Amazon Titan models via Bedrock."""
+        system_prompt = "You are an expert Terraform developer specializing in AWS infrastructure. Generate clean, production-ready Terraform code with proper resource naming, tags, and best practices."
+        full_prompt = f"{system_prompt}\n\n{prompt}"
+
+        body = {
+            "inputText": full_prompt,
+            "textGenerationConfig": {
+                "maxTokenCount": self.max_tokens,
+                "temperature": self.temperature,
+                "topP": 0.9
+            }
+        }
+
+        response = self.bedrock_client.invoke_model(
+            modelId=self.bedrock_model_id,
+            body=json.dumps(body),
+            contentType='application/json'
+        )
+
+        response_body = json.loads(response['body'].read())
+        return response_body['results'][0]['outputText']
+
+    def _call_ai21_model(self, prompt: str) -> str:
+        """Call AI21 models via Bedrock."""
+        system_prompt = "You are an expert Terraform developer specializing in AWS infrastructure. Generate clean, production-ready Terraform code with proper resource naming, tags, and best practices."
+        full_prompt = f"{system_prompt}\n\n{prompt}"
+
+        body = {
+            "prompt": full_prompt,
+            "maxTokens": self.max_tokens,
+            "temperature": self.temperature,
+            "topP": 0.9
+        }
+
+        response = self.bedrock_client.invoke_model(
+            modelId=self.bedrock_model_id,
+            body=json.dumps(body),
+            contentType='application/json'
+        )
+
+        response_body = json.loads(response['body'].read())
+        return response_body['completions'][0]['data']['text']
+
+    def _call_cohere_model(self, prompt: str) -> str:
+        """Call Cohere models via Bedrock."""
+        system_prompt = "You are an expert Terraform developer specializing in AWS infrastructure. Generate clean, production-ready Terraform code with proper resource naming, tags, and best practices."
+        full_prompt = f"{system_prompt}\n\n{prompt}"
+
+        body = {
+            "prompt": full_prompt,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
+            "p": 0.9
+        }
+
+        response = self.bedrock_client.invoke_model(
+            modelId=self.bedrock_model_id,
+            body=json.dumps(body),
+            contentType='application/json'
+        )
+
+        response_body = json.loads(response['body'].read())
+        return response_body['generations'][0]['text']
+
+    def _generate_with_lmstudio(self, prompt: str) -> str:
+        """Generate Terraform code using LM Studio."""
+        try:
+            response = self.lmstudio_client.chat.completions.create(
+                model=self.lmstudio_model,
                 messages=[
                     {
                         "role": "system",
@@ -73,27 +529,197 @@ output "{{ name }}" {
                         "content": prompt
                     }
                 ],
-                temperature=0.1,
-                max_tokens=2000
+                temperature=self.temperature,
+                max_tokens=self.max_tokens
             )
-            
-            terraform_code = response.choices[0].message.content.strip()
-            
-            # Add provider configuration
-            provider_template = Template(self.templates['provider'])
-            provider_config = provider_template.render(provider_version=provider_version)
-            
-            # Combine provider config with generated code
-            full_terraform_code = f"{provider_config}\n{terraform_code}"
-            
-            return self._clean_terraform_code(full_terraform_code)
-            
+            return response.choices[0].message.content.strip()
         except Exception as e:
-            raise Exception(f"Failed to generate Terraform code: {str(e)}")
-    
+            raise Exception(f"LM Studio generation failed: {str(e)}")
+
+    def _generate_with_ollama(self, prompt: str) -> str:
+        """Generate Terraform code using Ollama."""
+        system_prompt = "You are an expert Terraform developer specializing in AWS infrastructure. Generate clean, production-ready Terraform code with proper resource naming, tags, and best practices."
+
+        try:
+            # Use Ollama's chat API
+            payload = {
+                "model": self.ollama_model,
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": system_prompt
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt
+                    }
+                ],
+                "stream": False,
+                "options": {
+                    "temperature": self.temperature,
+                    "num_predict": self.max_tokens
+                }
+            }
+
+            response = requests.post(
+                f"{self.ollama_base_url}/api/chat",
+                json=payload,
+                timeout=self.timeout,
+                verify=self.verify_ssl
+            )
+            response.raise_for_status()
+
+            result = response.json()
+            return result['message']['content'].strip()
+
+        except requests.exceptions.RequestException as e:
+            raise Exception(f"Ollama generation failed: {str(e)}")
+        except (KeyError, json.JSONDecodeError) as e:
+            raise Exception(f"Invalid Ollama response format: {str(e)}")
+
+    def get_available_models(self) -> List[Dict[str, str]]:
+        """Get list of available models for the current provider."""
+        if self.provider == "bedrock":
+            return self._get_bedrock_models()
+        elif self.provider == "lmstudio":
+            return self._get_lmstudio_models()
+        elif self.provider == "ollama":
+            return self._get_ollama_models()
+        elif self.provider == "openai":
+            return self._get_openai_models()
+        else:
+            return []
+
+    def _get_bedrock_models(self) -> List[Dict[str, str]]:
+        """Get list of available Bedrock models for text generation."""
+        try:
+            bedrock_client = self.aws_session_manager.get_client('bedrock')
+            response = bedrock_client.list_foundation_models(
+                byOutputModality='TEXT'
+            )
+
+            models = []
+            for model in response['modelSummaries']:
+                if 'TEXT' in model.get('inputModalities', []):
+                    models.append({
+                        'model_id': model['modelId'],
+                        'provider': model['providerName'],
+                        'name': model['modelName']
+                    })
+
+            return models
+
+        except Exception as e:
+            print(f"Warning: Could not fetch Bedrock models: {str(e)}")
+            return []
+
+    def _get_lmstudio_models(self) -> List[Dict[str, str]]:
+        """Get list of available LM Studio models."""
+        try:
+            response = requests.get(f"{self.lmstudio_base_url}/v1/models", timeout=5, verify=self.verify_ssl)
+            response.raise_for_status()
+
+            models_data = response.json()
+            models = []
+
+            for model in models_data.get('data', []):
+                models.append({
+                    'model_id': model.get('id', 'unknown'),
+                    'provider': 'LM Studio',
+                    'name': model.get('id', 'unknown')
+                })
+
+            return models
+
+        except Exception as e:
+            print(f"Warning: Could not fetch LM Studio models: {str(e)}")
+            return []
+
+    def _get_ollama_models(self) -> List[Dict[str, str]]:
+        """Get list of available Ollama models."""
+        try:
+            response = requests.get(f"{self.ollama_base_url}/api/tags", timeout=5, verify=self.verify_ssl)
+            response.raise_for_status()
+
+            models_data = response.json()
+            models = []
+
+            for model in models_data.get('models', []):
+                size = model.get('size', 'unknown')
+                if isinstance(size, int):
+                    size = f"{size // (1024**3):.1f}GB" if size > 1024**3 else f"{size // (1024**2):.0f}MB"
+                models.append({
+                    'model_id': model.get('name', 'unknown'),
+                    'provider': 'Ollama',
+                    'name': model.get('name', 'unknown'),
+                    'size': str(size)
+                })
+
+            return models
+
+        except Exception as e:
+            print(f"Warning: Could not fetch Ollama models: {str(e)}")
+            return []
+
+    def _get_openai_models(self) -> List[Dict[str, str]]:
+        """Get list of common OpenAI models."""
+        # Return common OpenAI models since the API doesn't easily list available models
+        return [
+            {'model_id': 'gpt-4', 'provider': 'OpenAI', 'name': 'GPT-4'},
+            {'model_id': 'gpt-4-turbo', 'provider': 'OpenAI', 'name': 'GPT-4 Turbo'},
+            {'model_id': 'gpt-3.5-turbo', 'provider': 'OpenAI', 'name': 'GPT-3.5 Turbo'},
+            {'model_id': 'gpt-3.5-turbo-16k', 'provider': 'OpenAI', 'name': 'GPT-3.5 Turbo 16K'}
+        ]
+
+    def get_provider_info(self) -> Dict[str, Any]:
+        """Get information about the current provider configuration."""
+        info = {
+            'provider': self.provider,
+            'max_tokens': self.max_tokens,
+            'temperature': self.temperature
+        }
+
+        if self.provider == 'openai':
+            info.update({
+                'model': self.openai_model,
+                'api_key_configured': bool(self.api_key),
+                'aws_profile': self.aws_profile
+            })
+        elif self.provider == 'bedrock':
+            info.update({
+                'region': self.bedrock_region,
+                'model_id': self.bedrock_model_id,
+                'available_models': len(self.get_available_models()),
+                'aws_profile': self.aws_profile
+            })
+
+            # Add session info if we have a session manager
+            if hasattr(self, 'aws_session_manager'):
+                session_info = self.aws_session_manager.get_session_info()
+                info.update({
+                    'account_id': session_info.get('account_id'),
+                    'user_arn': session_info.get('user_arn')
+                })
+        elif self.provider == 'lmstudio':
+            info.update({
+                'model': self.lmstudio_model,
+                'base_url': self.lmstudio_base_url,
+                'available_models': len(self.get_available_models()),
+                'timeout': self.timeout
+            })
+        elif self.provider == 'ollama':
+            info.update({
+                'model': self.ollama_model,
+                'base_url': self.ollama_base_url,
+                'available_models': len(self.get_available_models()),
+                'timeout': self.timeout
+            })
+
+        return info
+
     def _create_terraform_prompt(self, description: str) -> str:
         """Create a detailed prompt for Terraform code generation."""
-        
+
         prompt = f"""
 Generate Terraform code for the following AWS infrastructure requirement:
 
@@ -121,16 +747,16 @@ Focus on:
 Return only valid Terraform HCL code without any markdown formatting or explanations.
 """
         return prompt
-    
+
     def _clean_terraform_code(self, code: str) -> str:
         """Clean and format the generated Terraform code."""
-        
+
         # Remove markdown code blocks if present
         if "```" in code:
             lines = code.split('\n')
             cleaned_lines = []
             in_code_block = False
-            
+
             for line in lines:
                 if line.strip().startswith('```'):
                     in_code_block = not in_code_block
@@ -138,33 +764,33 @@ Return only valid Terraform HCL code without any markdown formatting or explanat
                 if not in_code_block or line.strip() == '':
                     continue
                 cleaned_lines.append(line)
-            
+
             code = '\n'.join(cleaned_lines)
-        
+
         # Remove extra whitespace and ensure proper formatting
         lines = [line.rstrip() for line in code.split('\n')]
-        
+
         # Remove empty lines at the beginning and end
         while lines and not lines[0].strip():
             lines.pop(0)
         while lines and not lines[-1].strip():
             lines.pop()
-        
+
         return '\n'.join(lines)
-    
+
     def validate_terraform_syntax(self, terraform_code: str) -> Dict[str, Any]:
         """Basic validation of Terraform syntax (simplified)."""
-        
+
         validation_result = {
             'valid': True,
             'errors': [],
             'warnings': []
         }
-        
+
         # Basic checks
         required_blocks = ['resource', 'variable', 'output']
         found_blocks = []
-        
+
         lines = terraform_code.split('\n')
         for line in lines:
             line = line.strip()
@@ -174,24 +800,24 @@ Return only valid Terraform HCL code without any markdown formatting or explanat
                 found_blocks.append('variable')
             elif line.startswith('output '):
                 found_blocks.append('output')
-        
+
         # Check for balanced braces
         open_braces = terraform_code.count('{')
         close_braces = terraform_code.count('}')
-        
+
         if open_braces != close_braces:
             validation_result['valid'] = False
             validation_result['errors'].append(f"Unbalanced braces: {open_braces} opening, {close_braces} closing")
-        
+
         # Check for at least one resource
         if 'resource' not in found_blocks:
             validation_result['warnings'].append("No resources found in generated code")
-        
+
         return validation_result
-    
+
     def generate_terraform_plan_command(self, terraform_dir: str = ".") -> str:
         """Generate the terraform plan command for the generated code."""
-        
+
         commands = [
             f"cd {terraform_dir}",
             "terraform init",
@@ -199,12 +825,12 @@ Return only valid Terraform HCL code without any markdown formatting or explanat
             "terraform plan",
             "# To apply: terraform apply"
         ]
-        
+
         return '\n'.join(commands)
-    
+
     def get_resource_examples(self) -> Dict[str, str]:
         """Get examples of common AWS resources that can be generated."""
-        
+
         examples = {
             "S3 Bucket": "Create an S3 bucket with versioning and encryption enabled",
             "VPC": "Create a VPC with public and private subnets across 2 availability zones",
@@ -217,5 +843,5 @@ Return only valid Terraform HCL code without any markdown formatting or explanat
             "Load Balancer": "Create Application Load Balancer with target groups",
             "Auto Scaling": "Set up Auto Scaling Group with launch template"
         }
-        
+
         return examples
