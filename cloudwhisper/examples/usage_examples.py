@@ -81,6 +81,76 @@ def example_bedrock_generation(aws_profile=None):
     except Exception as e:
         print(f"Error: {e}")
 
+def example_lmstudio_generation(aws_profile=None):
+    """Example of generating Terraform code using LM Studio."""
+    print("\n=== LM Studio Terraform Generation Example ===")
+
+    if aws_profile:
+        print(f"Using AWS profile: {aws_profile}")
+
+    try:
+        # Initialize generator with LM Studio provider
+        generator = TerraformGenerator(
+            provider='lmstudio',
+            local_model='auto',  # Use currently loaded model
+            aws_profile=aws_profile
+        )
+
+        # Show provider info
+        provider_info = generator.get_provider_info()
+        print(f"Using {provider_info['provider']} provider at {provider_info.get('base_url', 'default URL')}")
+
+        # Generate Terraform code for an ECS cluster
+        description = "Create an ECS cluster with Fargate service and Application Load Balancer"
+        terraform_code = generator.generate_terraform(description)
+
+        print("Generated Terraform code:")
+        print(terraform_code[:500] + "..." if len(terraform_code) > 500 else terraform_code)
+
+        # List available models
+        models = generator.get_available_models()
+        print(f"\nAvailable models: {len(models)} found")
+        for model in models[:3]:  # Show first 3 models
+            print(f"  - {model.get('model_id', 'Unknown')}")
+
+    except Exception as e:
+        print(f"Error: {e}")
+
+def example_ollama_generation(aws_profile=None):
+    """Example of generating Terraform code using Ollama."""
+    print("\n=== Ollama Terraform Generation Example ===")
+
+    if aws_profile:
+        print(f"Using AWS profile: {aws_profile}")
+
+    try:
+        # Initialize generator with Ollama provider
+        generator = TerraformGenerator(
+            provider='ollama',
+            local_model='llama2',  # Can be changed to llama3, codellama, etc.
+            aws_profile=aws_profile
+        )
+
+        # Show provider info
+        provider_info = generator.get_provider_info()
+        print(f"Using {provider_info['provider']} provider with {provider_info.get('model', 'default')} model")
+
+        # Generate Terraform code for a Lambda function
+        description = "Create a Python Lambda function with API Gateway integration and proper IAM roles"
+        terraform_code = generator.generate_terraform(description)
+
+        print("Generated Terraform code:")
+        print(terraform_code[:500] + "..." if len(terraform_code) > 500 else terraform_code)
+
+        # List available models
+        models = generator.get_available_models()
+        print(f"\nAvailable models: {len(models)} found")
+        for model in models[:5]:  # Show first 5 models
+            print(f"  - {model.get('model_id', 'Unknown')} (Size: {model.get('size', 'Unknown')})")
+
+    except Exception as e:
+        print(f"Error: {e}")
+
 def example_cost_analysis(aws_profile=None):
     """Example of analyzing AWS costs."""
     print("\n=== Cost Analysis Example ===")
@@ -163,6 +233,9 @@ Examples:
   python usage_examples.py --profile sandbox  # Use 'sandbox' AWS profile
   python usage_examples.py --openai-only      # Only run OpenAI examples
   python usage_examples.py --bedrock-only     # Only run Bedrock examples
+  python usage_examples.py --lmstudio-only    # Only run LM Studio examples
+  python usage_examples.py --ollama-only      # Only run Ollama examples
+  python usage_examples.py --local-only       # Only run local LLM examples
   python usage_examples.py --cost-only        # Only run cost analysis examples
         '''
     )
@@ -189,6 +262,24 @@ Examples:
         '--cost-only',
         action='store_true',
         help='Only run cost analysis and optimization examples'
+    )
+
+    parser.add_argument(
+        '--lmstudio-only',
+        action='store_true',
+        help='Only run LM Studio Terraform generation examples'
+    )
+
+    parser.add_argument(
+        '--ollama-only',
+        action='store_true',
+        help='Only run Ollama Terraform generation examples'
+    )
+
+    parser.add_argument(
+        '--local-only',
+        action='store_true',
+        help='Only run local LLM examples (LM Studio and Ollama)'
     )
 
     return parser.parse_args()
@@ -218,6 +309,13 @@ if __name__ == "__main__":
         example_terraform_generation(args.profile)
     elif args.bedrock_only:
         example_bedrock_generation(args.profile)
+    elif args.lmstudio_only:
+        example_lmstudio_generation(args.profile)
+    elif args.ollama_only:
+        example_ollama_generation(args.profile)
+    elif args.local_only:
+        example_lmstudio_generation(args.profile)
+        example_ollama_generation(args.profile)
     elif args.cost_only:
         example_cost_analysis(args.profile)
         example_cost_optimization(args.profile)
@@ -226,6 +324,8 @@ if __name__ == "__main__":
         # Run all examples
         example_terraform_generation(args.profile)
         example_bedrock_generation(args.profile)
+        example_lmstudio_generation(args.profile)
+        example_ollama_generation(args.profile)
         example_cost_analysis(args.profile)
         example_cost_optimization(args.profile)
         example_s3_optimization(args.profile)

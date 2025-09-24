@@ -14,33 +14,64 @@ export AWS_ACCESS_KEY_ID=your_access_key
 export AWS_SECRET_ACCESS_KEY=your_secret_key
 export AWS_DEFAULT_REGION=us-east-1
 export OPENAI_API_KEY=your_openai_key
+
+# Or alternatively setup the config
+cloudwhisper setup
 ```
 
-### Testing
+### Running Tests
 ```bash
 # Run all tests
 pytest
 
 # Run a specific test file
-pytest cloudwhisper/tests/test_basic.py
+pytest tests/test_basic.py
 
 # Run a specific test class or function
-pytest cloudwhisper/tests/test_basic.py::TestTerraformGenerator
-pytest cloudwhisper/tests/test_basic.py::TestTerraformGenerator::test_clean_terraform_code
+pytest tests/test_basic.py::TestTerraformGenerator
+pytest tests/test_basic.py::TestTerraformGenerator::test_clean_terraform_code
+
+# Run tests with coverage
+pytest --cov=cloudwhisper tests/
 ```
 
-### Running the CLI
-```bash
-# View all available commands
-cloudwhisper --help
+### CLI Commands Reference
 
-# Generate Terraform code
+#### Terraform Generation
+```bash
+# Generate Terraform code from natural language
 cloudwhisper generate "Create an S3 bucket with versioning enabled"
 cloudwhisper generate "Set up a VPC with public and private subnets" --output vpc.tf
 
-# Analyze AWS costs
+# Specify provider and model
+cloudwhisper generate "Create an EC2 instance" --provider openai --model gpt-4
+cloudwhisper generate "Create an RDS instance" --provider bedrock --model anthropic.claude-3-sonnet-20240229-v1:0 --region us-east-1
+cloudwhisper generate "Create a Lambda function" --provider lmstudio --base-url http://127.0.0.1:1234
+cloudwhisper generate "Create a CloudFront distribution" --provider ollama --model llama3.2
+```
+
+#### LLM Provider Management
+```bash
+# Configure LLM provider
+cloudwhisper setup --provider [openai|bedrock|lmstudio|ollama|auto]
+
+# List available models
+cloudwhisper list-models
+cloudwhisper list-models --provider bedrock --region us-east-1
+
+# Show provider information
+cloudwhisper provider-info
+
+# Test connections to local LLMs
+cloudwhisper test-connection
+```
+
+#### AWS Cost Analysis
+```bash
+# Analyze costs
 cloudwhisper analyze-costs --days 30
 cloudwhisper analyze-costs --service ec2 --days 7 --granularity DAILY
+cloudwhisper analyze-costs --group-by SERVICE --group-by REGION
 
 # Get optimization recommendations
 cloudwhisper optimize
@@ -54,65 +85,103 @@ cloudwhisper find-idle --days 7
 cloudwhisper savings-plans
 ```
 
-### Demo Script
+#### AWS Profile Management
 ```bash
-# Run the demo script to see example commands
-python cloudwhisper/demo.py
+# List available AWS profiles
+cloudwhisper list-profiles
+
+# Show AWS account information
+cloudwhisper aws-info --profile [profile-name]
+
+# Use specific profile with any command
+cloudwhisper [command] --profile [profile-name]
 ```
 
-## Architecture Overview
+## Project Architecture
 
-### Project Structure
-- `cloudwhisper/`: Main package directory
-  - `cloudwhisper/`: Core code files
-    - `__init__.py`: Package initialization
-    - `cli.py`: CLI command definitions using Click
-    - `infrawhisper.py`: Terraform generation functionality
-    - `cloudfuel.py`: AWS cost analysis and optimization
-  - `tests/`: Unit tests
-  - `examples/`: Usage examples
-  - `setup.py`: Package installation script
-
-### Key Components
+### Core Components
 
 1. **CLI Module** (`cli.py`):
-   - Defines all command-line commands using the Click framework
-   - Entry point for the application
-   - Routes commands to appropriate functionality
+   - Built with Click framework
+   - Defines command groups, options, and parameters
+   - Handles command routing and output formatting using Rich
+   - Central entry point via `main()` function
 
 2. **InfraWhisper** (`infrawhisper.py`):
-   - `TerraformGenerator` class uses OpenAI to convert natural language to Terraform
-   - Includes template rendering with Jinja2
-   - Provides validation and cleaning of generated code
+   - `TerraformGenerator` class converts natural language to Terraform
+   - Multi-provider LLM support (OpenAI, AWS Bedrock, LM Studio, Ollama)
+   - Smart provider detection based on available credentials
+   - Template rendering for common Terraform patterns
+   - Code validation and cleaning
 
 3. **CloudFuel** (`cloudfuel.py`):
-   - `CostAnalyzer` class fetches and analyzes AWS cost data
-   - `CostOptimizer` class identifies cost-saving opportunities
-   - Uses AWS Cost Explorer, EC2, S3, RDS, and other AWS APIs
-   - Displays recommendations using rich tables and panels
+   - `CostAnalyzer` for AWS cost data analysis
+   - `CostOptimizer` for resource optimization recommendations
+   - Rich console output formatting with tables and panels
 
-### Data Flow
-1. **Terraform Generation Flow**:
-   - User provides natural language description
-   - OpenAI API generates Terraform code
-   - Code is processed, cleaned, and validated
-   - Output is displayed or saved to file
+4. **AWS Session Manager** (`aws_session.py`):
+   - Centralized AWS client creation with profile support
+   - Client caching and region management
+   - Credentials validation and session information retrieval
 
-2. **Cost Analysis Flow**:
-   - AWS Cost Explorer API fetches cost data
-   - Data is processed and analyzed
-   - Results displayed in formatted tables
+### Provider Architecture
 
-3. **Optimization Flow**:
-   - AWS resource utilization data is collected
-   - Analysis identifies optimization opportunities
-   - Recommendations are presented to the user
+The tool supports four LLM providers:
 
-### Dependencies
-- `boto3`: AWS SDK for Python
-- `openai`: OpenAI API client
-- `click`: Command-line interface creation
-- `rich`: Terminal formatting and display
-- `jinja2`: Template rendering
-- `tabulate`: Table formatting
-- `pytest`: Testing framework
+1. **OpenAI**: Cloud-based models requiring API key
+   - Models: GPT-3.5 Turbo, GPT-4, etc.
+   - Authentication via `OPENAI_API_KEY` environment variable
+
+2. **AWS Bedrock**: AWS-managed foundation models
+   - Models: Claude (Anthropic), Titan (Amazon), etc.
+   - Authentication via AWS credentials or profile
+   - Supports multiple model-specific input formats
+
+3. **LM Studio**: Local LLM server with OpenAI-compatible API
+   - Default URL: http://127.0.0.1:1234
+   - No API key required for local usage
+
+4. **Ollama**: Local LLM server for running models locally
+   - Default URL: http://localhost:11434
+   - Models: Llama, Mistral, etc.
+
+### Testing Approach
+
+The codebase uses pytest for testing with:
+- Unit tests for individual components
+- Mock objects for AWS services using `unittest.mock`
+- Test fixtures for common testing scenarios
+- Parameterized tests for comprehensive coverage
+
+Key test files:
+- `test_basic.py`: Core functionality tests
+- `test_bedrock_cli.py`: AWS Bedrock CLI command tests
+- `test_bedrock_integration.py`: AWS Bedrock integration tests
+
+### Configuration Management
+
+The tool uses a layered configuration approach:
+1. Command-line arguments (highest priority)
+2. Configuration file (~/.cloudwhisper/config.yaml)
+3. Environment variables
+4. Auto-detection of available providers (lowest priority)
+
+Configuration file example:
+```yaml
+llm:
+  provider: bedrock
+bedrock:
+  region: us-east-1
+  model_id: anthropic.claude-3-sonnet-20240229-v1:0
+  max_tokens: 2000
+  temperature: 0.1
+aws:
+  profile: default
+```
+
+## Development Notes
+
+- Python 3.8+ required
+- Key dependencies: boto3, openai, click, rich, jinja2, pyyaml
+- Local model support requires LM Studio or Ollama running locally
+- AWS credentials with appropriate permissions needed for cost analysis
